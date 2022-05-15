@@ -27,10 +27,15 @@ char daysOfWeek[7][12] = {
 const int PWMPin = A0;
 const int buttonPin = 7;
 
+int buttonState = 0;
 int PWMValue = analogRead(PWMPin);
-int prevPWMValue = PWMValue; // used to compare current and past, used for changing slides on the clock
+int prevPWMValue = PWMValue; // used to compare current and past, used for changing slides or selected content on the clock
 int currentSlide = 0; // defines where you are on the clock currently
 int prevSecond = 0; //used to check if the clock should update or not
+
+// variables related to the alarm function
+int alarmCLock[4] = {0, 0, 0};
+bool alarmActive = false;
 
 bool changedSlide = true;
 
@@ -114,9 +119,68 @@ void clockDisplay(DateTime now)
     //display.clearDisplay();
     display.setCursor(10, 10);
 }
+
+int getPWMValue(int currentOption, int maxValue)
+{
+  PWMValue = analogRead(PWMPin);
+  if (PWMValue >= prevPWMValue + 10)
+  {
+    prevPWMValue = PWMValue;
+    if (currentOption < maxValue)
+      return ++currentOption;
+    return 0;
+  }
+
+  else if (PWMValue <= prevPWMValue - 10)
+  {
+    prevPWMValue = PWMValue;
+    if (currentOption > 0) // min value
+      return --currentOption;
+    return maxValue;
+  }
+  return currentOption;
+}
+
+void writeAlarmDisplay(int currentClockSelected)
+{
+  char clockChars[7];
+  sprintf(clockChars, "%d%d%d", alarmHour, alarmMin, alarmSec);
+  display.write("Alarm\n");
+  for (int i = 0; i < 5; i++)
+  {
+    if (i % 2 == 0 && i > 0)
+      display.write(":");
+      
+    if (currentClockSelected == i)
+      display.setTextColor(SSD1306_BLACK);
+    if (alarmClock[i / 2])
+    display.write(clockChars[i]);
+    display.setTextColor(SSD1306_WHITE);
+  }
+  display.display();
+}
+
+void setAlarm()
+{
+  int currentClockSelected = 0; // 0 is 10 hour, 1 is 1 hour, 2 is 10 min etc.
+  bool buttonPressed = false; // used for exiting program
+  while(true)
+  {
+    buttonState = digitalRead(buttonPin);
+    currentClockSelected = getPWMValue(currentClockSelected, 5);
+    writeAlarmDisplay(currentClockSelected);
+    display.clearDisplay();
+    display.setCursor(10, 10);
+    if (buttonState == HIGH)
+      break;
+  }
+}
  
 void setup() {
   Serial.begin(9600);
+
+  pinMode(buttonPin, INPUT);
+  
   display.begin(SSD1306_SWITCHCAPVCC, screenAddress);
   display.clearDisplay();
   rtc.begin();
@@ -126,43 +190,26 @@ void setup() {
 
 void loop() {
   DateTime now = rtc.now();
-  PWMValue = analogRead(PWMPin);
+  buttonState = digitalRead(buttonPin);
   Serial.println(PWMValue, DEC);
   Serial.println(currentSlide, DEC);
-  if (PWMValue >= prevPWMValue + 10)
-  {
-    prevPWMValue = PWMValue;
-    if (currentSlide < 1) // max value
-    {
-      currentSlide++;
-      display.clearDisplay();
-      display.setCursor(10, 10);
-      changedSlide = false;
-    }
-  }
-
-  else if (PWMValue <= prevPWMValue - 10)
-  {
-    prevPWMValue = PWMValue;
-    if (currentSlide > 0) // min value
-    {
-      currentSlide--;
-      display.clearDisplay();
-      display.setCursor(10, 10);
-      changedSlide = false;
-    }
-  }
   
+  currentSlide = getPWMValue(currentSlide, 1);
   if (now.second() != prevSecond && currentSlide == 0)
   {
     display.clearDisplay();
     clockDisplay(now);
     prevSecond = now.second();
   }
-  else if (currentSlide == 1 && !changedSlide)
+  else if (currentSlide == 1)
   {
-    display.write("sample text");
-    display.display();
-    changedSlide = true;
+    if (buttonState == HIGH)
+      setAlarm();
   }
+
+  /*if (buttonState == HIGH)
+  {
+    display.write("button pressed");
+    display.display();
+  }*/
 }

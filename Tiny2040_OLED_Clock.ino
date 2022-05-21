@@ -3,6 +3,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <avr/dtostrf.h>
+#include <pthread.h>  // continue here
 #include "RTClib.h"
 
 #define screenHeight 64
@@ -34,8 +35,9 @@ int currentSlide = 0; // defines where you are on the clock currently
 int prevSecond = 0; //used to check if the clock should update or not
 
 // variables related to the alarm function
-int alarmClock[3] = {5, 3, 57};
+int alarmClock[3] = {0, 0, 0};  // hour, minute, second
 bool alarmActive = false;
+bool alarmTriggered = false;
 
 bool changedSlide = true;
 
@@ -124,11 +126,74 @@ void clockDisplay(DateTime now)
     //delay(timeDelay);
 }
 
+void alarmTriggeredDisp()
+{
+  ulong prevMillis = millis();
+  resetDisplay();
+  while (buttonState == LOW)
+  {
+    if (millis() - prevMillis >= 2000)
+    {
+      display.invertDisplay(false);
+      prevMillis = millis();
+    }
+    else if (millis() - prevMillis >= 1000)
+    {
+      display.invertDisplay(true);
+    }
+    resetDisplay();
+    display.display();
+    buttonState = digitalRead(buttonPin);
+  }
+  display.invertDisplay(false);
+  alarmTriggered = false;
+  alarmActive = false;
+}
+
+void decrementAlarmTimer()
+{
+  if (alarmClock[0] <= 0 && alarmClock[1] <= 0 && alarmClock[2] <= 0)
+  {
+    alarmTriggered = true;
+    return;
+  }
+  else if (alarmClock[2] <= 0 && alarmClock[1] <= 0)
+  {
+    alarmClock[2] = 59;
+    alarmClock[1] = 59;
+    alarmClock[0]--;
+  }
+  else if (alarmClock[2] <= 0)
+  {
+    alarmClock[2] = 59;
+    alarmClock[1]--;
+  }
+  else
+  {
+    alarmClock[2]--;
+  }
+}
+
+void alarmClockManager(DateTime now)
+{
+  Serial.println("inside alarmClockManager");
+  Serial.print("prev second: ");
+  Serial.print(prevSecond, DEC);
+  Serial.print(" - current second: ");
+  Serial.println(now.second(), DEC); 
+  
+  if (prevSecond != now.second())
+  {
+    decrementAlarmTimer();
+    prevSecond = now.second();
+  }
+}
+
 int getPWMValue(int currentOption, int maxValue)
 {
   PWMValue = analogRead(PWMPin);
   Serial.println(PWMValue, DEC);
-  if (PWMValue >= prevPWMValue + 10)
+  if (PWMValue >= prevPWMValue + 20)
   {
     prevPWMValue = PWMValue;
     if (currentOption < maxValue)
@@ -136,7 +201,7 @@ int getPWMValue(int currentOption, int maxValue)
     return 0;
   }
 
-  else if (PWMValue <= prevPWMValue - 10)
+  else if (PWMValue <= prevPWMValue - 20)
   {
     prevPWMValue = PWMValue;
     if (currentOption > 0) // min value
@@ -145,6 +210,8 @@ int getPWMValue(int currentOption, int maxValue)
   }
   return currentOption;
 }
+
+
 
 void writeAlarmDisplay(int currentClockSelected)
 {
@@ -173,32 +240,51 @@ void writeAlarmDisplay(int currentClockSelected)
   display.display();
 }
 
+void alarmCheckValueBoundaries()
+{
+  if (alarmClock[0] >= 90)
+    alarmClock[0] -= 70;
+  else if (alarmClock[0] >= 30)
+    alarmClock[0] -= 30;
+  else if (alarmClock[0] >= 24)
+    alarmClock[0] -= 20;
+
+  if (alarmClock[1] >= 90)
+    alarmClock[1] -= 40;
+  else if (alarmClock[1] >= 60)
+    alarmClock[1] -= 60;
+
+  if (alarmClock[2] >= 90)
+    alarmClock[2] -= 40;
+  else if (alarmClock[2] >= 60)
+    alarmClock[2] -= 60;
+}
+
 void editAlarm(int currentClockSelected)
 {
  while (buttonState == LOW)
  { 
     if (currentClockSelected % 2 == 1)
-      alarmClock[currentClockSelected / 2] += getPWMValue(alarmClock[currentClockSelected / 2] % 10, 10);
+      alarmClock[currentClockSelected / 2] = getPWMValue(alarmClock[currentClockSelected / 2] % 10, 9) + (alarmClock[currentClockSelected / 2] / 10) * 10;
     else
-      alarmClock[currentClockSelected / 2] += 10 * getPWMValue(alarmClock[currentClockSelected / 2] / 10, 10);
+      alarmClock[currentClockSelected / 2] = 10 * getPWMValue(alarmClock[currentClockSelected / 2] / 10, 9) + alarmClock[currentClockSelected / 2] % 10;
+
+    alarmCheckValueBoundaries();
+      
     resetDisplay();
     writeAlarmDisplay(currentClockSelected);
     buttonState = digitalRead(buttonPin);
     
  }
+ delay(200);
  resetDisplay();
-
-   /*if (alarmClock[currentClockSelected / 2] > 100)
-    alarmClock -= 100;
-   else if (alarmClock[currentClockSelected / 2] < 0)
-    alarmClock += 100;*/
 }
 
 void setAlarm()
 {
   delay(100);
   int currentClockSelected = 0; // 0 is 10 hour, 1 is 1 hour, 2 is 10 min etc.
-  bool buttonPressed = false; // used for exiting program
+  //bool buttonPressed = false; // used for exiting program
   while(true)
   {
     buttonState = digitalRead(buttonPin);
@@ -214,12 +300,21 @@ void setAlarm()
         {
           writeAlarmDisplay(-1);
           delay(200);
+          alarmActive = true;
           return;
         }
         buttonState = digitalRead(buttonPin);
       }
       if (millis() - buttonPressedStart >= 500)
+      {
+        writeAlarmDisplay(-1);
+        delay(200);
+        return;
+      }
+      else
+      {
         editAlarm(currentClockSelected);
+      }
     }
   }
 }
@@ -234,6 +329,8 @@ void setup() {
   rtc.begin();
   //rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); // used when you need to resync clock
   prepareDisplayChars();
+
+  //pthread_t alarmClockManager = pthread_create(); // continue here
 }
 
 void loop() {
@@ -242,11 +339,11 @@ void loop() {
   Serial.println(currentSlide, DEC);
   
   currentSlide = getPWMValue(currentSlide, 1);
-  if (now.second() != prevSecond && currentSlide == 0)
+  if (/*now.second() != prevSecond && */currentSlide == 0)
   {
     resetDisplay();
     clockDisplay(now);
-    prevSecond = now.second();
+    //prevSecond = now.second();
   }
   else if (currentSlide == 1)
   {
@@ -254,16 +351,18 @@ void loop() {
     
     if (buttonState == HIGH)
     {
+      alarmActive = false;
       resetDisplay();
       setAlarm();
       delay(100);
+      prevSecond = now.second();
     }
     resetDisplay();
   }
+  
+  if (alarmActive)
+    alarmClockManager(now);
 
-  /*if (buttonState == HIGH)
-  {
-    display.write("button pressed");
-    display.display();
-  }*/
+  if (alarmTriggered)
+    alarmTriggeredDisp();
 }

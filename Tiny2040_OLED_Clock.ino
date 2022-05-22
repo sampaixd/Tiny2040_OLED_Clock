@@ -3,7 +3,6 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <avr/dtostrf.h>
-#include <pthread.h>  // continue here
 #include "RTClib.h"
 
 #define screenHeight 64
@@ -15,31 +14,22 @@
 Adafruit_SSD1306 display(screenWidth, screenHeight, &Wire, resetPin);
 RTC_DS3231 rtc;
 
-char daysOfWeek[7][12] = { 
- "Sunday",
- "Monday",
- "Tuesday",
- "Wednesday",
- "Thursday",
- "Friday",
- "Saturday"
-};
-
 const int PWMPin = A0;
 const int buttonPin = 7;
+
+bool sleepMode = false; // my attempt at saving power
 
 int buttonState = 0;
 int PWMValue = analogRead(PWMPin);
 int prevPWMValue = PWMValue; // used to compare current and past, used for changing slides or selected content on the clock
 int currentSlide = 0; // defines where you are on the clock currently
-int prevSecond = 0; //used to check if the clock should update or not
 
 // variables related to the alarm function
 int alarmClock[3] = {0, 0, 0};  // hour, minute, second
+int prevSecond = 0; //used to check if the alarm should update or not
 bool alarmActive = false;
 bool alarmTriggered = false;
 
-bool changedSlide = true;
 
 void prepareDisplayChars() {
  display.setTextSize(2);
@@ -110,20 +100,14 @@ void clockDisplay(DateTime now)
 {
   getCurrentTime(now);    
     display.write("\n");
-    //display.write(daysOfWeek[now.dayOfTheWeek()]);
     char dateChar[8];
     sprintf(dateChar, " %d/%d", now.day(), now.month());
-    //Serial.println(dateChar);
     display.write(dateChar);
     display.write("\n");
     char temperature[12];
     display.write(dtostrf(rtc.getTemperature(), 6, 2, temperature));
     display.write(" C");
-    //Serial.print("Temperature: ");
-    //Serial.print(("%.2f", rtc.getTemperature()));
-    //Serial.println(" C");
     display.display();
-    //delay(timeDelay);
 }
 
 void alarmTriggeredDisp()
@@ -152,10 +136,10 @@ void alarmTriggeredDisp()
 
 void decrementAlarmTimer()
 {
-  if (alarmClock[0] <= 0 && alarmClock[1] <= 0 && alarmClock[2] <= 0)
+  if (alarmClock[0] <= 0 && alarmClock[1] <= 0 && alarmClock[2] <= 1)
   {
+    alarmClock[2]--;
     alarmTriggered = true;
-    return;
   }
   else if (alarmClock[2] <= 0 && alarmClock[1] <= 0)
   {
@@ -176,12 +160,6 @@ void decrementAlarmTimer()
 
 void alarmClockManager(DateTime now)
 {
-  Serial.println("inside alarmClockManager");
-  Serial.print("prev second: ");
-  Serial.print(prevSecond, DEC);
-  Serial.print(" - current second: ");
-  Serial.println(now.second(), DEC); 
-  
   if (prevSecond != now.second())
   {
     decrementAlarmTimer();
@@ -192,7 +170,7 @@ void alarmClockManager(DateTime now)
 int getPWMValue(int currentOption, int maxValue)
 {
   PWMValue = analogRead(PWMPin);
-  Serial.println(PWMValue, DEC);
+  //Serial.println(PWMValue, DEC);
   if (PWMValue >= prevPWMValue + 20)
   {
     prevPWMValue = PWMValue;
@@ -318,6 +296,7 @@ void setAlarm()
     }
   }
 }
+
  
 void setup() {
   Serial.begin(9600);
@@ -330,23 +309,55 @@ void setup() {
   //rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); // used when you need to resync clock
   prepareDisplayChars();
 
-  //pthread_t alarmClockManager = pthread_create(); // continue here
 }
 
 void loop() {
   DateTime now = rtc.now();
   buttonState = digitalRead(buttonPin);
-  Serial.println(currentSlide, DEC);
+  Serial.print("button state: ");
+  Serial.println(buttonState);
   
+  Serial.print("current slide: ");
+  Serial.println(currentSlide, DEC);
   currentSlide = getPWMValue(currentSlide, 1);
-  if (/*now.second() != prevSecond && */currentSlide == 0)
+  
+    if (alarmActive)
+    alarmClockManager(now);
+
+  if (alarmTriggered)
+    alarmTriggeredDisp();
+
+  if (sleepMode)
+  {
+    if (buttonState == LOW)
+      currentSlide = -1;
+    else
+    {
+      delay(200);
+      sleepMode = false;
+      currentSlide = 0;
+    }
+  }
+
+  buttonState = digitalRead(buttonPin);
+  
+  Serial.print("sleep mode: ");
+  Serial.println(sleepMode);
+  if (currentSlide == 0)
   {
     resetDisplay();
     clockDisplay(now);
-    //prevSecond = now.second();
+    if (buttonState == HIGH)
+    {
+      delay(200);
+      resetDisplay();
+      display.display();
+      sleepMode = true;
+    }
   }
   else if (currentSlide == 1)
   {
+    resetDisplay();
     writeAlarmDisplay(-1);
     
     if (buttonState == HIGH)
@@ -360,9 +371,5 @@ void loop() {
     resetDisplay();
   }
   
-  if (alarmActive)
-    alarmClockManager(now);
 
-  if (alarmTriggered)
-    alarmTriggeredDisp();
 }
